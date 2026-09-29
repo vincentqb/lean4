@@ -85,6 +85,14 @@ public def JobQueue := IO.Ref (Array OpaqueJob)
 /-- A Lake context with a build configuration and additional build data. -/
 public structure BuildContext extends BuildConfig, Context where
   leanTrace : BuildTrace
+  /--
+  The trace of the C compiler when it is not the one bundled with Lean (for example, `LEAN_CC`,
+  `CC`, or `cc` from `PATH`): the name it is run by and a hash of its executable's contents. Lean C
+  objects mix it into their traces (not in packages with `bootstrap := true`), so they are rebuilt
+  when the compiler changes, but not when the same compiler is reached through another directory.
+  `none` for the bundled compiler, whose identity the Lean trace already covers.
+  -/
+  ccTrace? : Option BuildTrace := none
   leanIncludeDirs : Array (Option (FilePath × BuildTrace))
   registeredJobs : JobQueue
   /--
@@ -115,6 +123,10 @@ public instance [Pure m] : MonadLift LakeM (BuildT m) where
 
 @[inline] public def getLeanTrace [Functor m] [MonadBuild m] : m BuildTrace :=
   (·.leanTrace) <$> getBuildContext
+
+@[inline, inherit_doc BuildContext.ccTrace?]
+public def Internal.getCcTrace? [Functor m] [MonadBuild m] : m (Option BuildTrace) :=
+  (·.ccTrace?) <$> getBuildContext
 
 @[inline] public def getBuildConfig [Functor m] [MonadBuild m] : m BuildConfig :=
   (·.toBuildConfig) <$> getBuildContext

@@ -341,6 +341,42 @@ def monitorJob (ctx : MonitorContext) (job : Job α) : BaseIO (BuildResult α) :
   else
     return {toMonitorResult := result, out := .error "build failed"}
 
+/--
+Resolves a command to the file it runs: a path with a directory part is used as is, and a bare
+name is looked up in `PATH`. Where executables have an extension (Windows), it is tried as well.
+-/
+def findCommand? (cmd : FilePath) : BaseIO (Option FilePath) := do
+  let withExtension (file : FilePath) :=
+    if FilePath.exeExtension.isEmpty then #[file] else #[file, file.addExtension FilePath.exeExtension]
+  let isFile (file : FilePath) : BaseIO Bool := return (← file.pathExists) && !(← file.isDir)
+  if cmd.components.length > 1 then
+    return ← (withExtension cmd).findM? isFile
+  let some path ← IO.getEnv "PATH" | return none
+  for dir in SearchPath.parse path do
+    if let some file ← (withExtension (dir / cmd)).findM? isFile then
+      return some file
+  return none
+
+/--
+The trace of the Lean installation's C compiler when it is not the one bundled with Lean: the name
+the compiler is run by, mixed with a hash of the contents of the executable it runs (found through
+`PATH` and symbolic links). The name is part of it because one executable can behave differently
+under different names (as `clang` and `clang++` do). If the executable cannot be read, the command
+itself is hashed. A wrapper (such as a `ccache` link) is hashed as itself, not as the compiler it runs.
+-/
+def computeCcTrace? (lean : LeanInstall) : BaseIO (Option BuildTrace) := do
+  unless lean.customCc do
+    return none
+  let name := lean.cc.fileName.getD lean.cc.toString
+  let contents ← do
+    match ← findCommand? lean.cc with
+    | some file =>
+      match ← (do computeFileHash (← IO.FS.realPath file)).toBaseIO with
+      | .ok hash => pure hash
+      | .error _ => pure (pureHash lean.cc.toString)
+    | none => pure (pureHash lean.cc.toString)
+  return some <| .ofHash ((pureHash name).mix contents) s!"C compiler {lean.cc}"
+
 def mkBuildContext
   (ws : Workspace) (cfg : BuildConfig) (jobs : JobQueue)
   (cancelTk? : Option IO.CancelToken := none)
@@ -365,6 +401,7 @@ def mkBuildContext
   registeredJobs := jobs
   leanTrace := .ofHash (pureHash ws.lakeEnv.leanGithash)
     s!"Lean {Lean.versionStringCore}, commit {ws.lakeEnv.leanGithash}"
+  ccTrace? := ← computeCcTrace? ws.lakeEnv.lean
   cancelTk?
   leanIncludeDirs := ← ws.packages.mapM fun pkg => do
     unless pkg.bootstrap do

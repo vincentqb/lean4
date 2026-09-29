@@ -850,6 +850,9 @@ the `weakArgs` are not. Thus, system-dependent options like `-I` or `-L` should
 be `weakArgs` to avoid build artifact incompatibility between systems
 (i.e., a change in the file path should not cause a rebuild).
 
+The `compiler` itself is not part of the trace, so changing it alone does not
+cause a rebuild; add its identity through `extraDepTrace` if it should.
+
 You can add more components to the trace via `extraDepTrace`,
 which will be computed in the resulting `Job` before building.
 -/
@@ -878,6 +881,11 @@ public def Internal.buildLeanO
 : SpawnM (Job FilePath) :=
   srcJob.mapM fun srcFile => do
     addLeanTrace
+    -- Lean's own build shares its C objects through the Lake cache between builds that use
+    -- different C compilers (see `src/CMakeLists.txt`), so its packages do not trace the compiler.
+    unless (← getCurrPackage?).any (·.bootstrap) do
+      if let some ccTrace ← Internal.getCcTrace? then
+        addTrace ccTrace
     if let some (_, trace) := leanIncludeDir? then
       -- Lean-produced C files contain `#include <lean/lean.h>`.
       -- Usually this dependency is captured by the Lean trace, but not with an override.
